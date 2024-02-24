@@ -36,6 +36,7 @@ def scrape_game(game_id):
     else:
         pbp_text = req.text 
         pbp = pd.json_normalize(extract_json(pbp_text))
+        pbp = add_header_trailer(pbp)
         pbp = add_misc_info(pbp,game_id)
         pbp = clean_pbp(pbp)
         print("Game {} finished.\n".format(game_id))
@@ -50,6 +51,25 @@ def extract_json(pbp_text):
     # Parse the JSON string
     pbp_json = json.loads(json_str)
     return pbp_json
+
+def add_header_trailer(pbp):
+    # Create a DataFrame with an empty row
+    empty_row = pd.DataFrame({col: np.nan for col in pbp.columns}, index=[0])
+    # Concatenate the empty row DataFrame with the original DataFrame
+    # Reset the index to maintain the order and drop the old index
+    pbp['details.time'] = pbp['details.time'].fillna("5:00")
+    pbp['details.period.id'] = pbp['details.period.id'].fillna("5")
+    pbp = pd.concat([empty_row, pbp], ignore_index=True)
+    pbp.iloc[0, pbp.columns.get_loc('details.time')] = "0:00"
+    pbp.iloc[0, pbp.columns.get_loc('details.period.id')] = "1"
+    pbp.iloc[0, pbp.columns.get_loc('event')] = "start_of_game"
+    max_period = pbp['details.period.id'].max()
+    pbp = pd.concat([pbp, empty_row], ignore_index=True)
+    pbp.loc[pbp.index[-1], 'details.period.id'] = max_period
+    pbp['shifted_time'] = pbp['details.time'].shift(1)
+    pbp.loc[pbp.index[-1], 'event'] = "end_of_game"
+    pbp.loc[pbp['event']=='end_of_game','details.time'] = pbp['shifted_time']
+    return pbp
 
 def add_misc_info(pbp,game_id):
     #For tons more of misc info not on the regualr pbp endpoint go to https://api-web.nhle.com/v1/gamecenter/2022030237/landing
@@ -88,8 +108,18 @@ def clean_pbp(pbp):
     pbp = clean_players(pbp)
     # clean events
     pbp = clean_events(pbp)
+    # clean teams
     pbp = clean_teams(pbp)
+    # build description
     pbp = build_desc(pbp)
+    # clean time
+    pbp = clean_time(pbp)
+    # add goalies
+    pbp = add_goalies(pbp)
+    # add score
+    pbp = add_score(pbp)
+    # format
+    pbp = format_pbp(pbp)
     return pbp
 
 
@@ -217,6 +247,15 @@ def clean_events(pbp):
     pbp.loc[(pbp['event']=='goalie_change')&(pbp['details.goalieComingIn.id'].isna()==0)&(pbp['details.goalieGoingOut.id'].isna()==0),'event'] = 'goalie_sub'
     pbp.loc[(pbp['event']=='goalie_change')&(pbp['details.goalieComingIn.id'].isna()==1)&(pbp['details.goalieGoingOut.id'].isna()==0),'event'] = 'goalie_pull'
     pbp.loc[(pbp['event']=='goalie_change')&(pbp['details.goalieComingIn.id'].isna()==0)&(pbp['details.goalieGoingOut.id'].isna()==1),'event'] = 'goalie_entrance'
+    # for some reason the data counts goals in 2 rows. First as a shot, next as a goal. We're gonna need to fix that
+    pbp.loc[pbp['event']=="goal",'details.isGoal'] = True
+    pbp.loc[(pbp['event']=="shot")&(pbp['details.isGoal']==True),'delete_this_row'] = 1
+    pbp.loc[(pbp['event']=="shot")&(pbp['details.isGoal']==True),'details.isGoal'] = False
+    pbp['shifted_shot_type'] = pbp['details.shotType'].shift(1)
+    pbp['shifted_shot_quality'] = pbp['details.shotQuality'].shift(1)
+    pbp.loc[pbp['event']=="goal",'details.shotType'] = pbp['shifted_shot_type']
+    pbp.loc[pbp['event']=="goal",'details.shotQuality'] = pbp['shifted_shot_quality']
+    pbp = pbp[pbp['delete_this_row']!=1]
     return pbp
 
 def clean_teams(pbp):
@@ -238,8 +277,9 @@ def clean_teams(pbp):
     pbp.loc[(pbp['event']=='goalie_entrance'),'event_team_id'] =  pbp['details.team_id'].fillna("0").astype(int)
     pbp.loc[(pbp['event']=='goalie_pull'),'event_team_id'] =  pbp['details.team_id'].fillna("0").astype(int)
     pbp.loc[(pbp['event']=='goalie_sub'),'event_team_id'] =  pbp['details.team_id'].fillna("0").astype(int)
-
-    pbp['event_team_id'] = pbp['event_team_id'].astype(int)
+    # shootout
+    pbp.loc[(pbp['event']=='shootout_shot')|(pbp['event']=='shootout_goal'),'event_team_id'] = pbp['details.shooterTeam.id'].fillna("0").astype(int)
+    pbp['event_team_id'] = pbp['event_team_id'].fillna("0").astype(int)
     # map team abbrev
     home_id = pbp.iloc[0]['home_team_id']
     home_name = pbp.iloc[0]['home_team']
@@ -250,6 +290,7 @@ def clean_teams(pbp):
     team_dict[away_id] = away_name
     pbp['event_team'] = pbp['event_team_id'].map(team_dict)
     return pbp
+
 def build_desc(pbp):
     pbp['description'] = ""
     # goal
@@ -270,9 +311,65 @@ def build_desc(pbp):
     pbp.loc[(pbp['event']=='goalie_pull'),'description'] = pbp['event_team']+ " goalie pull,  "+ pbp['event_primary_player_name'] + " being pulled from the game"
     pbp.loc[(pbp['event']=='goalie_entrance'),'description'] = pbp['event_team']+ " goalie entrance, " + pbp['event_primary_player_name'] + " entering the game"
     # penalty
-
+    pbp.loc[(pbp['event']=='penalty'),'description'] = pbp['event_team']+ " penalty, taken by " + pbp['event_primary_player_name'] + ", " + pbp['details.minutes'].fillna("0").astype(float).astype(int).astype(str)+ " minutes for " + pbp['details.description']
     return pbp
-a = scrape_game(34)
+
+def clean_time(pbp):
+    # function to convert time elapsed to seconds
+    pbp['details.time'] = pbp['details.time'].fillna("5:00")
+    pbp['details.period.id'] = pbp['details.period.id'].fillna("5")
+    convert_to_seconds_vectorized(pbp, ['details.time'])
+    # change from period seconds to game seconds
+    period_condition = pbp['details.period.id'] != 1
+    for time_col in ['details.time_seconds']:
+        pbp[time_col] = np.where(period_condition, pbp[time_col] + 1200 * (pbp['details.period.id'].astype(int) - 1), pbp[time_col])
+    pbp['game_minutes_elapsed'] = pbp['details.time_seconds']/60
+    return pbp
+
+def convert_to_seconds_vectorized(shifts, col_names):
+    '''
+    convert_to_seconds_vectorized - Function to convert the time columns to seconds
+    parameters - shifts - A data frame of extracted shift data, col_names - column names to convert
+    '''
+    for col in col_names:
+        time_parts = shifts[col].str.split(':', expand=True).astype(int)
+        shifts[f'{col}_seconds'] = time_parts[0] * 60 + time_parts[1]
+
+# add goalies
+def add_goalies(pbp):
+    return pbp
+
+def add_score(pbp):
+    pbp['is_goal'] = pbp['details.isGoal'].map({True:1,False:0})
+    pbp['is_goal'] = pbp['is_goal'].fillna("0").astype(int)
+    pbp['isHomeGoal']=0
+    pbp['isAwayGoal']=0
+    pbp.loc[((pbp['is_goal']==1)&(pbp['event_team']==pbp['home_team'])&(pbp['event']!='shootout_goal')),"isHomeGoal"] = 1
+    pbp.loc[((pbp['is_goal']==1)&(pbp['event_team']==pbp['away_team'])&(pbp['event']!='shootout_goal')),"isAwayGoal"] = 1
+    pbp.loc[((pbp['is_goal']==1)&(pbp['event_team']==pbp['home_team'])&(pbp['event']=='shootout_goal')&(pbp['details.isGameWinningGoal']==True)),"isHomeGoal"] = 1
+    pbp.loc[((pbp['is_goal']==1)&(pbp['event_team']==pbp['away_team'])&(pbp['event']=='shootout_goal')&(pbp['details.isGameWinningGoal']==True)),"isAwayGoal"] = 1
+    pbp['away_score'] = pbp['isAwayGoal'].cumsum()
+    pbp['home_score'] = pbp['isHomeGoal'].cumsum()
+    pbp.loc[((pbp['is_goal']==1)&(pbp['event_team']==pbp['home_team'])),'home_score'] = pbp['home_score']-1
+    pbp.loc[((pbp['is_goal']==1)&(pbp['event_team']==pbp['away_team'])),'away_score'] = pbp['away_score']-1
+    return pbp
+
+def format_pbp(pbp):
+    # final cleanup of the df
+    # rename some cols
+    # period
+    pbp = pbp.rename(columns={"details.period.id":"period","details.xLocation":"xC","details.yLocation":"yC","details.shotType":"shot_type","details.shotQuality":"shot_quality",
+                              "details.properties.isPowerPlay":"is_power_play","details.properties.isShortHanded":"is_short_handed","details.properties.isEmptyNet":"is_on_empty_net",
+                              "details.properties.isPenaltyShot":"is_penalty_shot","details.properties.isGameWinningGoal":"is_game_winning_goal","details.time_seconds":"game_seconds_elapsed"})
+    pbp = pbp[['game_id','game_date','home_team','home_team_id','away_team','away_team_id','period','game_seconds_elapsed','game_minutes_elapsed','event','event_team','event_primary_player_name','event_primary_player_id','event_primary_player_position','event_primary_player_sweater_number'
+               ,'event_secondary_player_name','event_secondary_player_id','event_secondary_player_position','event_secondary_player_sweater_number'
+             ,'event_tertiary_player_name','event_tertiary_player_id','event_tertiary_player_position','event_tertiary_player_sweater_number','description','shot_type','shot_quality','is_power_play','is_short_handed','is_on_empty_net','is_penalty_shot','is_game_winning_goal','xC','yC','away_score','home_score']]
+    return pbp
+
+a = scrape_game(17)
 #print(a[['event','event_primary_player_name','event_secondary_player_name','event_tertiary_player_name']])
-print(a[a['event']=='goal'][['game_id','game_date','event','event_team','event_primary_player_name','event_secondary_player_name','event_tertiary_player_name','description']])
-print(a[a['event']=='goalie_pull'][['game_id','game_date','event','event_team','event_primary_player_name','event_secondary_player_name','event_tertiary_player_name','description']])
+#print(a[a['event']=='goal'][['game_id','game_date','event','event_team','event_primary_player_name','event_secondary_player_name','event_tertiary_player_name','description']])
+#print(a[a['event']=='penalty'][['game_id','game_date','event','event_team','event_primary_player_name','event_secondary_player_name','event_tertiary_player_name','description']])
+#print(a[a['is_goal']==1][['shot_type','home_score','away_score']])
+#print(a[a['event']=="end_of_game"][['home_score','away_score']])
+a.to_csv("test4.csv")
