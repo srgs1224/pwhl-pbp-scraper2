@@ -36,10 +36,13 @@ def scrape_game(game_id):
     else:
         pbp_text = req.text 
         pbp = pd.json_normalize(extract_json(pbp_text))
-        pbp = add_header_trailer(pbp)
-        pbp = add_misc_info(pbp,game_id)
-        pbp = clean_pbp(pbp)
-        print("Game {} finished.\n".format(game_id))
+        if len(pbp)==0:
+            print("This game does not exist! Please enter a valid game id.")
+        else:
+            pbp = add_header_trailer(pbp)
+            pbp = add_misc_info(pbp,game_id)
+            pbp = clean_pbp(pbp)
+            print("Game {} finished.\n".format(game_id))
     return pbp
 
 def extract_json(pbp_text):
@@ -53,7 +56,7 @@ def extract_json(pbp_text):
     return pbp_json
 
 def add_header_trailer(pbp):
-    # Create a DataFrame with an empty row
+    # create a DataFrame with an empty row
     empty_row = pd.DataFrame({col: np.nan for col in pbp.columns}, index=[0])
     # Concatenate the empty row DataFrame with the original DataFrame
     # Reset the index to maintain the order and drop the old index
@@ -64,6 +67,9 @@ def add_header_trailer(pbp):
     pbp.iloc[0, pbp.columns.get_loc('details.period.id')] = "1"
     pbp.iloc[0, pbp.columns.get_loc('event')] = "start_of_game"
     max_period = pbp['details.period.id'].max()
+    # account for shootout
+    if "shootout" in pbp['event'].value_counts().keys().tolist():
+        max_period = 5
     pbp = pd.concat([pbp, empty_row], ignore_index=True)
     pbp.loc[pbp.index[-1], 'details.period.id'] = max_period
     pbp['shifted_time'] = pbp['details.time'].shift(1)
@@ -104,6 +110,10 @@ def add_misc_info(pbp,game_id):
     return pbp
 
 def clean_pbp(pbp):
+    # make sure all columns are here
+    pbp = check_columns(pbp)
+    # adding this function in to catch any weird data issues
+    pbp = check_values(pbp)
     # clean players, to add in event players
     pbp = clean_players(pbp)
     # clean events
@@ -122,10 +132,18 @@ def clean_pbp(pbp):
     pbp = format_pbp(pbp)
     return pbp
 
+def check_columns(pbp):
+    cols = pbp.columns.tolist()
+    needed = ['details.blocker.id','details.blocker.firstName','details.blocker.lastName','details.blocker.jerseyNumber','details.blocker.position','details.blocker.birthDate','details.blocker.playerImageURL',
+             'details.player.id','details.player.firstName','details.player.lastName','details.player.jerseyNumber','details.player.position','details.player.birthDate','details.player.playerImageURL',
+             'details.goalieGoingOut.firstName','details.goalieGoingOut.lastName','details.goalieGoingOut.id','details.goalieGoingOut.position','details.goalieGoingOut.jerseyNumber','details.teamId','details.shooter_team.id','details.shooterTeam.id','details.isGameWinningGoal']
+    difference = set(needed) - set(cols)
+    # Convert the result back to a list
+    result = list(difference)
+    pbp[result] = np.nan
+    return pbp
 
 def clean_players(pbp):
-    # make sure all columns are here
-    pbp_df = check_columns(pbp)
     # shot, block, shootout, penaltyshot primary
     pbp.loc[(pbp['event']=='shot')|(pbp['event']=='blocked_shot')|(pbp['event']=='shootout')|(pbp['event']=='penaltyshot'),'event_primary_player_name'] = pbp['details.shooter.firstName'].apply(str) + ' ' +pbp['details.shooter.lastName'].apply(str)
     pbp.loc[(pbp['event']=='shot')|(pbp['event']=='blocked_shot')|(pbp['event']=='shootout')|(pbp['event']=='penaltyshot'),'event_primary_player_id'] = pbp['details.shooter.id']
@@ -205,35 +223,29 @@ def clean_players(pbp):
     pbp.loc[pbp['event_tertiary_player_name']=="nan nan", 'event_tertiary_player_name'] = np.nan
     return pbp
 
-def check_columns(pbp):
-    cols = pbp.columns.tolist()
-    needed = ['details.blocker.id','details.blocker.firstName','details.blocker.lastName','details.blocker.jerseyNumber','details.blocker.position','details.blocker.birthDate','details.blocker.playerImageURL',
-             'details.player.id','details.player.firstName','details.player.lastName','details.player.jerseyNumber','details.player.position','details.player.birthDate','details.player.playerImageURL',
-             'details.goalieGoingOut.firstName','details.goalieGoingOut.lastName','details.goalieGoingOut.id','details.goalieGoingOut.position','details.goalieGoingOut.jerseyNumber','details.teamId','details.shooter_team.id','details.shooterTeam.id','details.isGameWinningGoal']
-    difference = set(needed) - set(cols)
-    # Convert the result back to a list
-    result = list(difference)
-    pbp[result] = np.nan
+def check_values(pbp):
+    # check to make sure OT1 isn't in period ID column. saw this in game 36
+    pbp.loc[pbp['details.period.id']=="OT1","details.period.id"] = "4"
     return pbp
 
 def extract_assists(pbp):
-    # Apply the transformation
+    # apply the transformation
     player_info = pbp.apply(flatten_player_info, axis=1)
     pbp = pd.concat([pbp, player_info], axis=1)
     return pbp
 
 def flatten_player_info(row):
-    # Check if 'players' is a list
+    # check if 'players' is a list
     if not isinstance(row['details.assists'], list):
         return pd.Series()
-    # Container for the flattened data
+    # container for the flattened data
     flattened = {}
     for i, player_dict in enumerate(row['details.assists']):
-        # Ensure player_dict is a dictionary
+        # ensure player_dict is a dictionary
         if not isinstance(player_dict, dict):
             continue
         for key, value in player_dict.items():
-            # Construct new column name: e.g., player_0_id, player_1_firstName
+            # construct new column name: e.g., player_0_id, player_1_firstName
             new_col_name = f'assistor_{i+1}_{key}'
             flattened[new_col_name] = value
     return pd.Series(flattened)
@@ -247,7 +259,7 @@ def clean_events(pbp):
     pbp.loc[(pbp['event']=='goalie_change')&(pbp['details.goalieComingIn.id'].isna()==0)&(pbp['details.goalieGoingOut.id'].isna()==0),'event'] = 'goalie_sub'
     pbp.loc[(pbp['event']=='goalie_change')&(pbp['details.goalieComingIn.id'].isna()==1)&(pbp['details.goalieGoingOut.id'].isna()==0),'event'] = 'goalie_pull'
     pbp.loc[(pbp['event']=='goalie_change')&(pbp['details.goalieComingIn.id'].isna()==0)&(pbp['details.goalieGoingOut.id'].isna()==1),'event'] = 'goalie_entrance'
-    # for some reason the data counts goals in 2 rows. First as a shot, next as a goal. We're gonna need to fix that
+    # for some reason the data counts goals in 2 rows. first as a shot, next as a goal. we're gonna need to fix that
     pbp.loc[pbp['event']=="goal",'details.isGoal'] = True
     pbp.loc[(pbp['event']=="shot")&(pbp['details.isGoal']==True),'delete_this_row'] = 1
     pbp.loc[(pbp['event']=="shot")&(pbp['details.isGoal']==True),'details.isGoal'] = False
@@ -333,7 +345,10 @@ def clean_time(pbp):
     period_condition = pbp['details.period.id'] != 1
     for time_col in ['details.time_seconds']:
         pbp[time_col] = np.where(period_condition, pbp[time_col] + 1200 * (pbp['details.period.id'].astype(int) - 1), pbp[time_col])
+    # account for shootouts that will occur at min 65 of the game
+    pbp.loc[(pbp['details.period.id']=="5")&((pbp['event']=='shootout_shot')|(pbp['event']=='shootout_goal')|(pbp['event']=='shootout')),'details.time_seconds'] = 3900
     pbp['game_minutes_elapsed'] = pbp['details.time_seconds']/60
+
     return pbp
 
 def convert_to_seconds_vectorized(shifts, col_names):
@@ -403,3 +418,5 @@ def format_pbp(pbp):
                ,'event_secondary_player_name','event_secondary_player_id','event_secondary_player_position','event_secondary_player_sweater_number'
              ,'event_tertiary_player_name','event_tertiary_player_id','event_tertiary_player_position','event_tertiary_player_sweater_number','description','shot_type','shot_quality','is_power_play','is_short_handed','is_on_empty_net','is_penalty_shot','is_game_winning_goal','xC','yC','away_score','home_score','current_home_goalie','current_away_goalie']]
     return pbp
+a = scrape_game(36)
+a.to_csv("test5.csv")
