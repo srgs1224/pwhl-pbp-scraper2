@@ -435,7 +435,3 @@ def format_pbp(pbp):
                ,'event_secondary_player_name','event_secondary_player_id','event_secondary_player_position','event_secondary_player_sweater_number'
              ,'event_tertiary_player_name','event_tertiary_player_id','event_tertiary_player_position','event_tertiary_player_sweater_number','description','shot_type','shot_quality','is_power_play','is_short_handed','is_on_empty_net','is_penalty_shot','is_game_winning_goal','xC','yC','away_score','home_score','current_home_goalie','current_away_goalie']]
     return pbp
-
-a = scrape_game(12)
-print(a[['home_score','away_score']])
-a.to_csv("asdasdasd.csv")
