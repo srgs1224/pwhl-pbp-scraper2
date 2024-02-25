@@ -27,6 +27,8 @@ def scrape_game(game_id):
     # Handle HTTP errors
     except requests.exceptions.HTTPError as http_err:
         print(f"Play-by-Play API HTTP error occurred: {http_err}")
+        print("This game does not exist! Please enter a valid game id.")
+        return None
     # Handle any exception related to the request
     except requests.exceptions.RequestException as req_exc:
         print(f"Play-by-Play API request failed: {req_exc}")
@@ -254,8 +256,8 @@ def clean_events(pbp):
     # change shootout event to shootout-shot or shootout-goal
     pbp.loc[(pbp['event']=='shootout')&(pbp['details.isGoal']==True),'event'] = "shootout_goal"
     pbp.loc[(pbp['event']=='shootout')&(pbp['details.isGoal']==False),'event'] = "shootout_shot"
-    pbp.loc[(pbp['event']=='penaltyshot')&(pbp['details.isGoal']==True),'event'] = "peanlty_shot_shot"
-    pbp.loc[(pbp['event']=='penaltyshot')&(pbp['details.isGoal']==False),'event'] = "penalty_shot_goal"
+    pbp.loc[(pbp['event']=='penaltyshot')&(pbp['details.isGoal']==True),'event'] = "peanlty_shot_goal"
+    pbp.loc[(pbp['event']=='penaltyshot')&(pbp['details.isGoal']==False),'event'] = "penalty_shot_shot"
     pbp.loc[(pbp['event']=='goalie_change')&(pbp['details.goalieComingIn.id'].isna()==0)&(pbp['details.goalieGoingOut.id'].isna()==0),'event'] = 'goalie_sub'
     pbp.loc[(pbp['event']=='goalie_change')&(pbp['details.goalieComingIn.id'].isna()==1)&(pbp['details.goalieGoingOut.id'].isna()==0),'event'] = 'goalie_pull'
     pbp.loc[(pbp['event']=='goalie_change')&(pbp['details.goalieComingIn.id'].isna()==0)&(pbp['details.goalieGoingOut.id'].isna()==1),'event'] = 'goalie_entrance'
@@ -334,6 +336,10 @@ def build_desc(pbp):
     pbp.loc[pbp['event']=='start_of_game','description'] = pbp['away_team'] + " @ " + pbp['home_team'] + ", start of game"
     # game end
     pbp.loc[pbp['event']=='end_of_game','description'] = pbp['away_team'] + " @ " + pbp['home_team'] + ", end of game. Final score: " + pbp['away_team'] + " " + pbp['away_score'].astype(str) + " - " + pbp['home_score'].astype(str) + " " + pbp['home_team']
+    # penalty shot shot
+    pbp.loc[pbp['event']=='penalty_shot_shot','description'] = pbp['event_team'] + " penalty shot attempt by " + pbp['event_primary_player_name']
+    # penalty shot goal
+    pbp.loc[pbp['event']=='penalty_shot_goal','description'] = pbp['event_team'] + " penalty shot goal scored by " + pbp['event_primary_player_name']
     return pbp
 
 def clean_time(pbp):
@@ -399,12 +405,23 @@ def add_score(pbp):
     pbp['isAwayGoal']=0
     pbp.loc[((pbp['is_goal']==1)&(pbp['event_team']==pbp['home_team'])&(pbp['event']!='shootout_goal')),"isHomeGoal"] = 1
     pbp.loc[((pbp['is_goal']==1)&(pbp['event_team']==pbp['away_team'])&(pbp['event']!='shootout_goal')),"isAwayGoal"] = 1
-    pbp.loc[((pbp['is_goal']==1)&(pbp['event_team']==pbp['home_team'])&(pbp['event']=='shootout_goal')&(pbp['details.isGameWinningGoal']==True)),"isHomeGoal"] = 1
-    pbp.loc[((pbp['is_goal']==1)&(pbp['event_team']==pbp['away_team'])&(pbp['event']=='shootout_goal')&(pbp['details.isGameWinningGoal']==True)),"isAwayGoal"] = 1
+    #pbp.loc[((pbp['is_goal']==1)&(pbp['event_team']==pbp['home_team'])&(pbp['event']=='shootout_goal')&(pbp['details.isGameWinningGoal']==True)),"isHomeGoal"] = 1
+    #pbp.loc[((pbp['is_goal']==1)&(pbp['event_team']==pbp['away_team'])&(pbp['event']=='shootout_goal')&(pbp['details.isGameWinningGoal']==True)),"isAwayGoal"] = 1
     pbp['away_score'] = pbp['isAwayGoal'].cumsum()
     pbp['home_score'] = pbp['isHomeGoal'].cumsum()
-    pbp.loc[((pbp['is_goal']==1)&(pbp['event_team']==pbp['home_team'])),'home_score'] = pbp['home_score']-1
-    pbp.loc[((pbp['is_goal']==1)&(pbp['event_team']==pbp['away_team'])),'away_score'] = pbp['away_score']-1
+    pbp.loc[((pbp['is_goal']==1)&(pbp['event_team']==pbp['home_team'])&(pbp['event']!='shootout_goal')),'home_score'] = pbp['home_score']-1
+    pbp.loc[((pbp['is_goal']==1)&(pbp['event_team']==pbp['away_team'])&(pbp['event']!='shootout_goal')),'away_score'] = pbp['away_score']-1
+    # for shootouts
+    if "shootout_shot" in pbp['event'].value_counts().keys().tolist():
+        shootout_goals = pbp[pbp['event']=="shootout_goal"]
+        shootout_goals.groupby("event_team").count().reset_index()
+        home_team = pbp.iloc[0]['home_team']
+        away_team = pbp.iloc[0]['away_team']
+        more_goals = shootout_goals['event_team'].value_counts().sort_values().keys()[0]
+        if more_goals == home_team:
+            pbp.loc[pbp['event']=="end_of_game",'home_score'] = pbp['home_score'].max()+1
+        else:
+            pbp.loc[pbp['event']=="end_of_game",'away_score'] = pbp['away_score'].max()+1
     return pbp
 
 def format_pbp(pbp):
@@ -418,5 +435,7 @@ def format_pbp(pbp):
                ,'event_secondary_player_name','event_secondary_player_id','event_secondary_player_position','event_secondary_player_sweater_number'
              ,'event_tertiary_player_name','event_tertiary_player_id','event_tertiary_player_position','event_tertiary_player_sweater_number','description','shot_type','shot_quality','is_power_play','is_short_handed','is_on_empty_net','is_penalty_shot','is_game_winning_goal','xC','yC','away_score','home_score','current_home_goalie','current_away_goalie']]
     return pbp
-a = scrape_game(36)
-a.to_csv("test5.csv")
+
+a = scrape_game(12)
+print(a[['home_score','away_score']])
+a.to_csv("asdasdasd.csv")
