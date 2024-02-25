@@ -110,14 +110,14 @@ def clean_pbp(pbp):
     pbp = clean_events(pbp)
     # clean teams
     pbp = clean_teams(pbp)
-    # build description
-    pbp = build_desc(pbp)
     # clean time
     pbp = clean_time(pbp)
     # add goalies
     pbp = add_goalies(pbp)
     # add score
     pbp = add_score(pbp)
+    # build description
+    pbp = build_desc(pbp)
     # format
     pbp = format_pbp(pbp)
     return pbp
@@ -209,7 +209,7 @@ def check_columns(pbp):
     cols = pbp.columns.tolist()
     needed = ['details.blocker.id','details.blocker.firstName','details.blocker.lastName','details.blocker.jerseyNumber','details.blocker.position','details.blocker.birthDate','details.blocker.playerImageURL',
              'details.player.id','details.player.firstName','details.player.lastName','details.player.jerseyNumber','details.player.position','details.player.birthDate','details.player.playerImageURL',
-             'details.goalieGoingOut.firstName','details.goalieGoingOut.lastName','details.goalieGoingOut.id','details.goalieGoingOut.position','details.goalieGoingOut.jerseyNumber','details.teamId','details.shooter_team.id']
+             'details.goalieGoingOut.firstName','details.goalieGoingOut.lastName','details.goalieGoingOut.id','details.goalieGoingOut.position','details.goalieGoingOut.jerseyNumber','details.teamId','details.shooter_team.id','details.shooterTeam.id','details.isGameWinningGoal']
     difference = set(needed) - set(cols)
     # Convert the result back to a list
     result = list(difference)
@@ -312,6 +312,16 @@ def build_desc(pbp):
     pbp.loc[(pbp['event']=='goalie_entrance'),'description'] = pbp['event_team']+ " goalie entrance, " + pbp['event_primary_player_name'] + " entering the game"
     # penalty
     pbp.loc[(pbp['event']=='penalty'),'description'] = pbp['event_team']+ " penalty, taken by " + pbp['event_primary_player_name'] + ", " + pbp['details.minutes'].fillna("0").astype(float).astype(int).astype(str)+ " minutes for " + pbp['details.description']
+    # shootout shot
+    pbp.loc[pbp['event']=="shootout_shot",'description'] = pbp['event_team'] + " shootout shot by " + pbp['event_primary_player_name']
+    # shootout goal
+    pbp.loc[(pbp['event']=="shootout_goal")&(pbp['details.isGameWinningGoal']==False),'description'] = pbp['event_team'] + " shootout goal by " + pbp['event_primary_player_name']
+    # shootout goal
+    pbp.loc[(pbp['event']=="shootout_goal")&(pbp['details.isGameWinningGoal']==True),'description'] = pbp['event_team'] + " game winning shootout goal by " + pbp['event_primary_player_name']
+    # game start
+    pbp.loc[pbp['event']=='start_of_game','description'] = pbp['away_team'] + " @ " + pbp['home_team'] + ", start of game"
+    # game end
+    pbp.loc[pbp['event']=='end_of_game','description'] = pbp['away_team'] + " @ " + pbp['home_team'] + ", end of game. Final score: " + pbp['away_team'] + " " + pbp['away_score'].astype(str) + " - " + pbp['home_score'].astype(str) + " " + pbp['home_team']
     return pbp
 
 def clean_time(pbp):
@@ -337,6 +347,34 @@ def convert_to_seconds_vectorized(shifts, col_names):
 
 # add goalies
 def add_goalies(pbp):
+    # Initialize dictionaries to keep track of the current goalies for home and away teams
+    current_home_goalies = {}  # Format: {game_id: goalie_name}
+    current_away_goalies = {}  # Format: {game_id: goalie_name}
+    
+    # Initialize lists to hold the current goalie for each event for home and away teams
+    current_home_goalie_per_event = []
+    current_away_goalie_per_event = []
+
+    # Iterate through each row in the DataFrame
+    for index, row in pbp.iterrows():
+        if (row['event'] == 'goalie_entrance')|(row['event'] == 'goalie_sub'):
+            # Update the current goalie for the corresponding team
+            if row['event_team'] == row['home_team']:
+                current_home_goalies[row['game_id']] = row['event_primary_player_name']
+            else:
+                current_away_goalies[row['game_id']] = row['event_primary_player_name']
+        elif row['event'] == 'goalie_pull':
+            if row['event_team'] == row['home_team']:
+                current_home_goalies[row['game_id']] = np.nan
+            else:
+                current_away_goalies[row['game_id']] = np.nan
+        # Append the current goalie for the home and away teams to their respective lists
+        current_home_goalie_per_event.append(current_home_goalies.get(row['game_id'], None))
+        current_away_goalie_per_event.append(current_away_goalies.get(row['game_id'], None))
+
+    # Add the current goalie information as new columns to the DataFrame
+    pbp['current_home_goalie'] = current_home_goalie_per_event
+    pbp['current_away_goalie'] = current_away_goalie_per_event
     return pbp
 
 def add_score(pbp):
@@ -363,13 +401,5 @@ def format_pbp(pbp):
                               "details.properties.isPenaltyShot":"is_penalty_shot","details.properties.isGameWinningGoal":"is_game_winning_goal","details.time_seconds":"game_seconds_elapsed"})
     pbp = pbp[['game_id','game_date','home_team','home_team_id','away_team','away_team_id','period','game_seconds_elapsed','game_minutes_elapsed','event','event_team','event_primary_player_name','event_primary_player_id','event_primary_player_position','event_primary_player_sweater_number'
                ,'event_secondary_player_name','event_secondary_player_id','event_secondary_player_position','event_secondary_player_sweater_number'
-             ,'event_tertiary_player_name','event_tertiary_player_id','event_tertiary_player_position','event_tertiary_player_sweater_number','description','shot_type','shot_quality','is_power_play','is_short_handed','is_on_empty_net','is_penalty_shot','is_game_winning_goal','xC','yC','away_score','home_score']]
+             ,'event_tertiary_player_name','event_tertiary_player_id','event_tertiary_player_position','event_tertiary_player_sweater_number','description','shot_type','shot_quality','is_power_play','is_short_handed','is_on_empty_net','is_penalty_shot','is_game_winning_goal','xC','yC','away_score','home_score','current_home_goalie','current_away_goalie']]
     return pbp
-
-a = scrape_game(17)
-#print(a[['event','event_primary_player_name','event_secondary_player_name','event_tertiary_player_name']])
-#print(a[a['event']=='goal'][['game_id','game_date','event','event_team','event_primary_player_name','event_secondary_player_name','event_tertiary_player_name','description']])
-#print(a[a['event']=='penalty'][['game_id','game_date','event','event_team','event_primary_player_name','event_secondary_player_name','event_tertiary_player_name','description']])
-#print(a[a['is_goal']==1][['shot_type','home_score','away_score']])
-#print(a[a['event']=="end_of_game"][['home_score','away_score']])
-a.to_csv("test4.csv")
