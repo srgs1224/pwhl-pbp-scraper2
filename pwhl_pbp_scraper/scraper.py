@@ -37,14 +37,30 @@ def scrape_game(game_id):
         print(f"Play-by-Play API Value error occured: {val_err}")
     else:
         pbp_text = req.text 
-        pbp = pd.json_normalize(extract_json(pbp_text))
-        if len(pbp)==0:
-            print("This game does not exist! Please enter a valid game id.")
-        else:
-            pbp = add_header_trailer(pbp)
-            pbp = add_misc_info(pbp,game_id)
-            pbp = clean_pbp(pbp)
-            print("Game {} finished.\n".format(game_id))
+pbp = pd.json_normalize(extract_json(pbp_text))
+
+# 🔧 Fix period values before any type conversion
+if 'details.period.id' in pbp.columns:
+    pbp['details.period.id'] = (
+        pbp['details.period.id']
+        .astype(str)
+        .str.replace("'", "")  # in case any values like 'OT1'
+        .replace({
+            'OT1': 4,
+            'OT2': 5,
+            'OT3': 6,
+            'OT4': 7
+        })
+    )
+
+if len(pbp) == 0:
+    print("This game does not exist! Please enter a valid game id.")
+else:
+    pbp = add_header_trailer(pbp)
+    pbp = add_misc_info(pbp, game_id)
+    pbp = clean_pbp(pbp)
+    print("Game {} finished.\n".format(game_id))
+
     return pbp
 
 def extract_json(pbp_text):
