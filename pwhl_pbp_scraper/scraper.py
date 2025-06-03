@@ -20,48 +20,47 @@ import re
 # Function to scrape single game
 def scrape_game(game_id):
     print("Scraping game {}...".format(game_id))
-    # Make request. URL is https://lscluster.hockeytech.com/feed/index.php?feed=statviewfeed&view=gameCenterPlayByPlay&game_id={id}&key=694cfeed58c932ee&client_code=pwhl&lang=en&league_id=&callback=angular.callbacks._8
     try:
-        req = requests.get("https://lscluster.hockeytech.com/feed/index.php?feed=statviewfeed&view=gameCenterPlayByPlay&game_id={}&key=694cfeed58c932ee&client_code=pwhl&lang=en&league_id=&callback=angular.callbacks._8".format(game_id))  
-        req.raise_for_status() 
-    # Handle HTTP errors
+        req = requests.get(
+            "https://lscluster.hockeytech.com/feed/index.php?feed=statviewfeed&view=gameCenterPlayByPlay&game_id={}&key=694cfeed58c932ee&client_code=pwhl&lang=en&league_id=&callback=angular.callbacks._8".format(game_id)
+        )
+        req.raise_for_status()
     except requests.exceptions.HTTPError as http_err:
         print(f"Play-by-Play API HTTP error occurred: {http_err}")
         print("This game does not exist! Please enter a valid game id.")
         return None
-    # Handle any exception related to the request
     except requests.exceptions.RequestException as req_exc:
         print(f"Play-by-Play API request failed: {req_exc}")
-    # Handle value-related issues
     except ValueError as val_err:
-        print(f"Play-by-Play API Value error occured: {val_err}")
+        print(f"Play-by-Play API Value error occurred: {val_err}")
     else:
-        pbp_text = req.text 
-pbp = pd.json_normalize(extract_json(pbp_text))
+        pbp_text = req.text
+        pbp = pd.json_normalize(extract_json(pbp_text))
 
-# 🔧 Fix period values before any type conversion
-if 'details.period.id' in pbp.columns:
-        pbp['details.period.id'] = (
-        pbp['details.period.id']
-        .astype(str)
-        .str.replace("'", "")  # in case any values like 'OT1'
-        .replace({
-            'OT1': 4,
-            'OT2': 5,
-            'OT3': 6,
-            'OT4': 7
-        })
-    )
+        # 🔧 Fix period values before any type conversion
+        if 'details.period.id' in pbp.columns:
+            pbp['details.period.id'] = (
+                pbp['details.period.id']
+                .astype(str)
+                .str.replace("'", "")
+                .replace({
+                    'OT1': 4,
+                    'OT2': 5,
+                    'OT3': 6,
+                    'OT4': 7
+                })
+            )
 
-if len(pbp) == 0:
-    print("This game does not exist! Please enter a valid game id.")
-else:
-    pbp = add_header_trailer(pbp)
-    pbp = add_misc_info(pbp, game_id)
-    pbp = clean_pbp(pbp)
-    print("Game {} finished.\n".format(game_id))
+        if len(pbp) == 0:
+            print("This game does not exist! Please enter a valid game id.")
+            return None
+        else:
+            pbp = add_header_trailer(pbp)
+            pbp = add_misc_info(pbp, game_id)
+            pbp = clean_pbp(pbp)
+            print("Game {} finished.\n".format(game_id))
+            return pbp  # ✅ Make sure this is indented correctly
 
-    return pbp
 
 def extract_json(pbp_text):
     # Need to strip out the angular callbacks tag
