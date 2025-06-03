@@ -41,7 +41,7 @@ pbp = pd.json_normalize(extract_json(pbp_text))
 
 # 🔧 Fix period values before any type conversion
 if 'details.period.id' in pbp.columns:
-    pbp['details.period.id'] = (
+        pbp['details.period.id'] = (
         pbp['details.period.id']
         .astype(str)
         .str.replace("'", "")  # in case any values like 'OT1'
