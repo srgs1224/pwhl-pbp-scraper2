@@ -11,11 +11,14 @@
 ########################################################################################################
 
 ######################################### Import Modules ###############################################
+######################################### Import Modules ###############################################
 import pandas as pd
 import requests
 import numpy as np
 import json
 import re
+
+############################################# Config ###################################################
 
 def scrape_game(game_id):
     print("Scraping game {}...".format(game_id))
@@ -38,6 +41,7 @@ def scrape_game(game_id):
         pbp_text = req.text
         pbp = pd.json_normalize(extract_json(pbp_text))
 
+        # 🔧 Fix period values before any type conversion
         if 'details.period.id' in pbp.columns:
             pbp['details.period.id'] = (
                 pbp['details.period.id']
@@ -62,22 +66,15 @@ def scrape_game(game_id):
             return pbp
 
 
-
 def extract_json(pbp_text):
-    # Need to strip out the angular callbacks tag
     pattern = r'angular\.callbacks\._\d+\('
-    # Use re.sub() to replace the matched pattern with an empty string at the beginning and ");" at the end
     json_str = re.sub(pattern, '', pbp_text).rstrip(');')
-    #json_str = pbp_text.strip('angular.callbacks._8(').rstrip(');')
-    # Parse the JSON string
     pbp_json = json.loads(json_str)
     return pbp_json
 
+
 def add_header_trailer(pbp):
-    # create a DataFrame with an empty row
     empty_row = pd.DataFrame({col: np.nan for col in pbp.columns}, index=[0])
-    # Concatenate the empty row DataFrame with the original DataFrame
-    # Reset the index to maintain the order and drop the old index
     pbp['details.time'] = pbp['details.time'].fillna("5:00")
     pbp['details.period.id'] = pbp['details.period.id'].fillna("5")
     pbp = pd.concat([empty_row, pbp], ignore_index=True)
@@ -85,15 +82,15 @@ def add_header_trailer(pbp):
     pbp.iloc[0, pbp.columns.get_loc('details.period.id')] = "1"
     pbp.iloc[0, pbp.columns.get_loc('event')] = "start_of_game"
     max_period = pbp['details.period.id'].max()
-    # account for shootout
     if "shootout" in pbp['event'].value_counts().keys().tolist():
         max_period = 5
     pbp = pd.concat([pbp, empty_row], ignore_index=True)
     pbp.loc[pbp.index[-1], 'details.period.id'] = max_period
     pbp['shifted_time'] = pbp['details.time'].shift(1)
     pbp.loc[pbp.index[-1], 'event'] = "end_of_game"
-    pbp.loc[pbp['event']=='end_of_game','details.time'] = pbp['shifted_time']
+    pbp.loc[pbp['event'] == 'end_of_game', 'details.time'] = pbp['shifted_time']
     return pbp
+
 
 def add_misc_info(pbp,game_id):
     #For tons more of misc info not on the regualr pbp endpoint go to https://api-web.nhle.com/v1/gamecenter/2022030237/landing
