@@ -16,8 +16,7 @@ import requests
 import numpy as np
 import json
 import re
-############################################# Config ###################################################
-# Function to scrape single game
+
 def scrape_game(game_id):
     print("Scraping game {}...".format(game_id))
     try:
@@ -31,13 +30,14 @@ def scrape_game(game_id):
         return None
     except requests.exceptions.RequestException as req_exc:
         print(f"Play-by-Play API request failed: {req_exc}")
+        return None
     except ValueError as val_err:
         print(f"Play-by-Play API Value error occurred: {val_err}")
+        return None
     else:
         pbp_text = req.text
         pbp = pd.json_normalize(extract_json(pbp_text))
 
-        # 🔧 Fix period values before any type conversion
         if 'details.period.id' in pbp.columns:
             pbp['details.period.id'] = (
                 pbp['details.period.id']
@@ -59,7 +59,8 @@ def scrape_game(game_id):
             pbp = add_misc_info(pbp, game_id)
             pbp = clean_pbp(pbp)
             print("Game {} finished.\n".format(game_id))
-            return pbp  # ✅ Make sure this is indented correctly
+            return pbp
+
 
 
 def extract_json(pbp_text):
