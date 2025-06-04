@@ -19,8 +19,27 @@ import json
 import re
 
 ############################################# Config ###################################################
+def normalize_period_columns(df):
+    for col in ['details.period', 'details.period.id']:
+        if col in df.columns:
+            df[col] = (
+                df[col]
+                .astype(str)
+                .str.strip()
+                .str.replace("'", "")
+                .replace({
+                    'OT1': '4',
+                    'OT2': '5',
+                    'OT3': '6',
+                    'OT4': '7',
+                    'SO': '5',
+                    'nan': ''
+                })
+            )
+            df[col] = pd.to_numeric(df[col], errors='coerce')
+    return df
 
-def scrape_game(game_id):
+def scrape_game(game_id): 
     print("Scraping game {}...".format(game_id))
     try:
         req = requests.get(
@@ -41,19 +60,8 @@ def scrape_game(game_id):
         pbp_text = req.text
         pbp = pd.json_normalize(extract_json(pbp_text))
 
-        # 🔧 Fix period values before any type conversion
-        if 'details.period.id' in pbp.columns:
-            pbp['details.period.id'] = (
-                pbp['details.period.id']
-                .astype(str)
-                .str.replace("'", "")
-                .replace({
-                    'OT1': 4,
-                    'OT2': 5,
-                    'OT3': 6,
-                    'OT4': 7
-                })
-            )
+        # 🧼 Clean period fields centrally here
+        pbp = normalize_period_columns(pbp)
 
         if len(pbp) == 0:
             print("This game does not exist! Please enter a valid game id.")
@@ -64,6 +72,7 @@ def scrape_game(game_id):
             pbp = clean_pbp(pbp)
             print("Game {} finished.\n".format(game_id))
             return pbp
+
 
 
 def extract_json(pbp_text):
